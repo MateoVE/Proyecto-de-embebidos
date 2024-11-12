@@ -19,7 +19,9 @@
 #define RIGHT_ENCODER_A 25
 #define RIGHT_ENCODER_B 33
 
-LibraryDrivebot robot;
+#include "SwarmBotClass.h"
+
+PushingSwarmBot robot;
 
 void setup() {
     robot.begin(LEFT_SERVO_PIN, RIGHT_SERVO_PIN,
