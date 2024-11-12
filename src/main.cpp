@@ -10,166 +10,57 @@
 // OUTPUT
 // 2 servos PWM
 // 1 display
-#include <Arduino.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <math.h>
-#include <time.h>
 
-// Define thresholds (adjust these based on testing)
-#define IF_THRESHOLD 500
-#define LIGHT_THRESHOLD 100
-#define OCCLUDED_THRESHOLD 50
-#define PI 3.141592653589793
-#define NUM_SENSORS 8
+// Pin definitions
+#define LEFT_SERVO_PIN 13
+#define RIGHT_SERVO_PIN 12
+#define LEFT_ENCODER_A 27
+#define LEFT_ENCODER_B 26
+#define RIGHT_ENCODER_A 25
+#define RIGHT_ENCODER_B 33
 
-// Se define los pines de los servos
-#define servo1Pin 9             
-#define servo2Pin 10            
-
-// Array of pin numbers for each sensor
-int sensor_pins[NUM_SENSORS] = {2, 3, 4, 5, 6, 7, 8, 9};
-
-// Define parameters for Lévy flight
-float alpha = 1.0;          // Scaling factor
-float mu = 1.5;             // Power-law exponent
-float beta = 0.8;           // Directional bias parameter
-
-// Tuning parameters
-int counts_per_degree = 5; // Number of encoder counts needed for a 1-degree turn (adjust based on testing)
-int pwm_speed = 150;       // PWM speed for turning (0-255, adjust based on your motor and surface)
-int wait = 100;            // 100 ms
-
-// Function prototypes
-int read_left_encoder();
-int read_right_encoder();
-void reset_encoders();
-void set_left_motor_pwm(int speed);
-void set_right_motor_pwm(int speed);
-void move_forward();
-void stop();
-void reverse();
-void turn();
-void turn_to_goal();
-void avoid_obstacle();
-int read_IF_sensor(int sensor_id);
-int read_photoresistor(int sensor_id);
-
-
-// Global variables
-int last_known_direction = 0; // Angle in degrees (0: front, 90: right, 180: back, 270: left)
-bool is_occluded = false;
-bool facing_goal = false;
-
-
-
-
-
-
-// Placeholder functions for sensor readings
-int read_IF_sensor(int sensor_id) {
-    // Replace with actual sensor reading code
-    return 0;
-}
-
-
-
-
-
-
-// Main obstacle avoidance function
-void avoid_obstacle(float sensor_readings[]) {
-    // -180 to 180
-    int obstacle_angle = get_vector_reading(sensor_readings);
-
-    // If no obstacles detected, return
-    if (obstacle_angle == 360) {
-        return;
-    }
-
-    // Determine turn direction (shortest path)
-    int turn_direction = (obstacle_angle > 0) ? 1 : 0;  // 1 for right, 0 for left
-
-    // Turn until either we've reached target angle or obstacle is no longer in front
-    for (int i = 0; i < abs(obstacle_angle) && i < 360; i++) {  // Limit to 360 to prevent infinite loop
-        // Turn one degree
-        turn(turn_direction);
-
-        // Get new vector reading and check if obstacle is still in front
-        int new_obstacle_angle = get_vector_reading(sensor_readings);
-        if (abs(new_obstacle_angle) > 100) { // if the obstacle is at least next to us, break
-            break;  // Stop turning if obstacle is no longer in front
-        }
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-// ----------------------------- FUNCIONAMIENTO DE SERVOMOTORES MEDIANTE FUENTE DE LUZ (USANDO LIBRERIA ARDUINO.H)---------------------------
-// Definicion de los pines de los sensores
-// const int lightSensorPin1 = ..;
-// const int lightSensorPin2 = ..;
-
-int initialPosition = 90;  // Posición inicial de los servos en grados
-int pulseMin = 544;        // Pulso mínimo (en microsegundos) para 0°
-int pulseMax = 2400;       // Pulso máximo (en microsegundos) para 180°
-
-// Función para ajustar el ángulo del servo mediante señal PWM
-void setServoAngle(int pin, int angle) {
-    // Calcular el ancho del pulso correspondiente al ángulo deseado
-    int pulseWidth = map(angle, 0, 180, pulseMin, pulseMax);
-
-    // Generar el pulso PWM en el pin del servo
-    digitalWrite(pin, HIGH);
-    delayMicroseconds(pulseWidth);
-    digitalWrite(pin, LOW);
-
-    // Completar el ciclo de 20 ms para mantener la frecuencia de 50 Hz
-    delay(20 - (pulseWidth / 1000)); // Ajuste para que el ciclo completo sea 20 ms
-}
+LibraryDrivebot robot;
 
 void setup() {
-    pinMode(servo1Pin, OUTPUT);
-    pinMode(servo2Pin, OUTPUT);
-
-    pinMode(lightSensorPin1, INPUT);
-    pinMode(lightSensorPin2, INPUT);
-
-    Serial.begin(9600);
-
-    // Colocar servos en posición inicial
-    setServoAngle(servo1Pin, initialPosition);
-    setServoAngle(servo2Pin, initialPosition);
+    robot.begin(LEFT_SERVO_PIN, RIGHT_SERVO_PIN,
+                LEFT_ENCODER_A, LEFT_ENCODER_B,
+                RIGHT_ENCODER_A, RIGHT_ENCODER_B);
 }
 
 void loop() {
-    // Leer valores de los sensores de luz
-    int lightValue1 = analogRead(lightSensorPin1);
-    int lightValue2 = analogRead(lightSensorPin2);
+    // Track the light source initially
+    robot.findLightDirection();
 
-    // Verificar si la luz supera el umbral en ambos sensores
-    if (lightValue1 > LIGHT_THRESHOLD && lightValue2 > LIGHT_THRESHOLD) {
-        // Determinar dirección basada en valores de luz (ejemplo: movimiento hacia adelante)
-        int movementDirection = map((lightValue1 + lightValue2) / 2, LIGHT_THRESHOLD, 1023, 0, 180);
+    if (robot.getIsOccluded()) {
+        // Three-step process: face light, find object, push object
 
-        // Mover ambos servos en la dirección deseada
-        setServoAngle(servo1Pin, movementDirection);
-        setServoAngle(servo2Pin, movementDirection);
+        // Step 1: Face the light direction
+        if (robot.face_light()) {
+            // Step 2: Move forward until object is found
+            if (robot.find_object()) {
+                // Step 3: Push the object while maintaining alignment
+                while (robot.push_object()) {
+                    delay(10);
+                    // push_object returns false if shadow is lost or object is lost
+                }
+            }
+        }
+
     } else {
-        // Mantener servos en posición estática
-        setServoAngle(servo1Pin, initialPosition);
-        setServoAngle(servo2Pin, initialPosition);
+        // Generate a random step length and angle using Lévy flight
+        int step_length = robot.levy_step();
+        int turn_angle = robot.levy_angle();
+
+        // Turn degrees
+        robot.resetEncoders();
+        while (!robot.turnToAngle(turn_angle)) {
+            delay(10);
+        }
+
+        // Move forward mm
+        robot.resetEncoders();
+        while (!robot.moveDistance(step_length)) {
+            delay(10);
+        }
     }
-
-    delay(500);  // Intervalo de lectura
 }
-
