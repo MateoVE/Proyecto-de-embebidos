@@ -19,7 +19,7 @@
 #define RIGHT_ENCODER_A 25
 #define RIGHT_ENCODER_B 33
 
-#include "SwarmBotClass.h"
+#include "PushingSwarmBot.h"
 
 PushingSwarmBot robot;
 
@@ -54,13 +54,11 @@ void loop() {
         int turn_angle = robot.levy_angle();
 
         // Turn degrees
-        robot.resetEncoders();
         while (!robot.turnToAngle(turn_angle)) {
             delay(10);
         }
 
         // Move forward mm
-        robot.resetEncoders();
         while (!robot.moveDistance(step_length)) {
             delay(10);
         }
