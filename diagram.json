@@ -32,17 +32,33 @@
     {
       "type": "wokwi-photoresistor-sensor",
       "id": "ldr5",
-      "top": 220.5,
-      "left": 570.5,
+      "top": 268.5,
+      "left": 551.3,
       "rotate": 90,
       "attrs": {}
     },
     {
       "type": "wokwi-photoresistor-sensor",
       "id": "ldr6",
-      "top": 220.5,
-      "left": 666.5,
+      "top": 268.5,
+      "left": 676.1,
       "rotate": 90,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo1",
+      "top": 8.6,
+      "left": 328.2,
+      "rotate": 270,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-servo",
+      "id": "servo2",
+      "top": 8.6,
+      "left": 510.6,
+      "rotate": 270,
       "attrs": {}
     }
   ],
@@ -66,7 +82,13 @@
     [ "esp:GND.1", "ldr5:GND", "black", [ "h-19.05", "v96", "h249.6" ] ],
     [ "ldr5:GND", "ldr6:GND", "black", [ "v28.8", "h96.4" ] ],
     [ "ldr5:DO", "esp:18", "green", [ "v9.6", "h-105", "v-28.8" ] ],
-    [ "ldr6:DO", "esp:5", "green", [ "v38.4", "h-210.6", "v-48" ] ]
+    [ "ldr6:DO", "esp:5", "green", [ "v38.4", "h-210.6", "v-48" ] ],
+    [ "servo2:GND", "servo1:GND", "black", [ "v19.2", "h-182.4" ] ],
+    [ "servo1:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "servo1:V+", "servo2:V+", "red", [ "v9.6", "h182.5" ] ],
+    [ "servo2:V+", "ldr5:VCC", "red", [ "v48", "h86.5", "v182.4" ] ],
+    [ "servo1:PWM", "esp:23", "orange", [ "v48", "h115.4", "v48" ] ],
+    [ "servo2:PWM", "esp:22", "orange", [ "v38.4", "h-57.4", "v67.2" ] ]
   ],
   "dependencies": {}
 }

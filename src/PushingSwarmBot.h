@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <ESP32Servo.h>
 
 class PushingSwarmBot {
 public:
@@ -29,6 +30,8 @@ public:
         Serial.begin(115200);
         delay(1000);
         current_state = SENSING;
+        left_servo.attach(SERVO_PINS[0], minPulseWidth, maxPulseWidth);
+        right_servo.attach(SERVO_PINS[1], minPulseWidth, maxPulseWidth);
     }
 
     void controlLoop() {
@@ -49,9 +52,13 @@ public:
                 break;
 
             case TURNING:
+                // because turning will change where the light angle is 
+                // PROBLEMAAA AQUI, SE SALE DEL RANGO -180 TO 180
+                light_angle -= turn_angle; //  outside our range of angles, fix that
                 while (!turnToAngle()) {
                     delay(10);
                 }
+                stop_servos();
                 current_state = MOVING;
                 break;
 
@@ -61,6 +68,7 @@ public:
                 while (!moveDistance()) { 
                     delay(10);
                 }
+                stop_servos();
                 current_state = SENSING;
                 break;
             
@@ -69,6 +77,7 @@ public:
                 while (!turnToAngle()) {
                     delay(10);
                 }
+                stop_servos();
                 light_angle = turn_angle; // light is in front of you
                 current_state = MOVING_TO_OBJ;
                 break;
@@ -79,15 +88,19 @@ public:
                 while (!moveDistance()) { 
                     delay(10);
                 }
+                stop_servos();
                 current_state = PUSHING;
                 break;
             
             case PUSHING:
                 push();
-                delay(500);
+                // delay(500);
 
                 light_angle = findLightDirection(); // determina is_occluded
-                if (!is_occluded) current_state = PLANNING; // si ya hay luz, seguir buscando objeto
+                if (!is_occluded) {
+                    stop_servos();
+                    current_state = PLANNING; // si ya hay luz, seguir buscando objeto
+                }
                 break;
         }
         updateStats();
@@ -102,14 +115,33 @@ public:
 
 private:
     State current_state;
+    Servo left_servo;
+    Servo right_servo;
     
     // Constants
     static const int NUM_LIGHT_SENSORS = 4;
     static const int NUM_IR_SENSORS = 2;
     const int LIGHT_SENSOR_PINS[NUM_LIGHT_SENSORS] = {34, 35, 32, 33};
     const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {5, 18};
+    
     static constexpr int OCCLUDED_THRESHOLD = 1000;
     static const int MAX_STEPS_TO_FIND_OBJECT = 50;
+
+    // servo parameters
+    const int SERVO_PINS[2] = {23, 22}; // L R
+    const int minPulseWidth = 500;
+    const int maxPulseWidth = 2400;
+    int move_proportional;
+    const int max_CW = 180;
+    const int max_CCW = 0;
+    const int slow_down_by = 20;
+    const int slow_CW = max_CW - slow_down_by;
+    const int slow_CCW = max_CCW + slow_down_by;
+    const int stop_angle = 90;
+    int direction_object;
+	// servo.write(0) makes it rotate counterclockwise at full speed.
+    // servo.write(90) stops the 360-degree servo (neutral position).
+	// servo.write(180) makes it rotate clockwise at full speed.
     
     // Lévy flight parameters
     static constexpr float alpha = 6.0;
@@ -180,21 +212,37 @@ private:
         return object_detected;
     }
 
+    int isAligned(){ // sensors go right to left
+        int aligned_sensors = 0;
+        for (int i = 0; i < NUM_IR_SENSORS; i++) {
+            if (digitalRead(IR_SENSOR_PINS[i]) == LOW) {
+                aligned_sensors += i+1;
+            }
+        }
+        return aligned_sensors;
+        // 0 no sensors
+        // 1 right sensor
+        // 2 left sensor
+        // 3 both sensors
+    }
+
     // last one, updating all stats
     void updateStats() {
         Serial.print("State: ");
         Serial.print(getStateName());  // Just use it directly
         
-        Serial.print(" \t Shadow: ");
+        Serial.print(" \t InShadow?: ");
         Serial.print(is_occluded);
-        Serial.print(" \t Obstruction: ");
+        Serial.print(" \t HitaWall?: ");
         Serial.print(object_detected);
-        Serial.print(" \t Light Ang: ");
+        Serial.print(" \t Light Angle: ");
         Serial.print(light_angle);
-        Serial.print(" \t Step Er: ");
+        Serial.print(" \t Step Error: ");
         Serial.print(step_length);
-        Serial.print(" \t Angle Er: ");
-        Serial.println(turn_angle);
+        Serial.print(" \t Angle Error: ");
+        Serial.print(turn_angle);
+        Serial.print(" \t direction_object: ");
+        Serial.println(direction_object);
     }
 
     // revise
@@ -227,12 +275,17 @@ private:
         return (int)step;
     }
 
-    // done
+    // R CW +
+    // L CCW -
     bool turnToAngle() {
         updateStats();  
+        // proportional control
+        move_proportional = turn_angle / 2; // makes the max value be +-90
         if (abs(turn_angle) > 0) {
-            delay(40);
+            left_servo.write(stop_angle + move_proportional);  // CW
+            right_servo.write(stop_angle + move_proportional); // CCW
             (turn_angle > 0) ? turn_angle-- : turn_angle++;
+            delay(40);
             return false;
         } else {
             return true;
@@ -242,10 +295,13 @@ private:
     // done
     bool moveDistance() {
         updateStats(); 
+        move_proportional = 9*step_length; // proportional control
         if (step_length > 0) {
-            if (isObstacleDetected()) { return true; }
+            if (isObstacleDetected()) {return true; }
+            left_servo.write(stop_angle + move_proportional);  // CW
+            right_servo.write(stop_angle - move_proportional); // CCW
             step_length--;
-            delay(500);
+            delay(500); // normally you count the encoder here
             return false;
         } else {
             return true;
@@ -253,6 +309,33 @@ private:
     }
 
     void push(){
-        delay(10);
+        direction_object = isAligned();
+        // 0 no sensors
+        // 1 right sensor
+        // 2 left sensor
+        // 3 both sensors
+        switch (direction_object) {
+            case 0:
+                // idk this should mean it lost the object, do nothing I guess
+                break;
+            case 1: // only right sensor, turn slight right
+                left_servo.write(max_CW);
+                right_servo.write(slow_CCW);
+                break;
+            case 2: // only left sensor, turn slight left
+                left_servo.write(slow_CW);
+                right_servo.write(max_CCW);
+                break;
+            case 3:
+                left_servo.write(max_CW);
+                right_servo.write(max_CCW);
+                break;
+        }
+        delay(1000);
+    }
+
+    void stop_servos(){
+        left_servo.write(stop_angle);
+        right_servo.write(stop_angle);
     }
 };
