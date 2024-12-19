@@ -1,28 +1,46 @@
-#include <Arduino.h>
-#include <ESP32Servo.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#pragma once
+#include <Arduino.h>            // general
+#include <ESP32Servo.h>         // servo
+#include <Wire.h>               // cable serial a compu
+#include <Adafruit_GFX.h>       // display
+#include <Adafruit_SSD1306.h>   // display
+#include <ESP32Encoder.h>       // encoder
+#include <apwifieeprommode.h>   // wifi de SE
+#include <HTTPClient.h>         // Wifi
+#include <Wifi.h>               // Wifi
 
-// verify background checking light
-// add encoder interruption counting
-// add method for pid to check 2% band after some time
+
 
 class PIDController {
 public:
-    PIDController(float Kp, float Ki, float Kd) : Kp(Kp), Ki(Ki), Kd(Kd), integral(0), prev_error(0) {}
+    PIDController(float Kp, float Ki, float Kd) : Kp(Kp), Ki(Ki), Kd(Kd), 
+    integral(0), prev_error(0), prev_prev_error(0), time_in_SS(0) {}
 
     float compute(float target, float actual) {
         float error = target - actual;
         integral += error;
         float derivative = error - prev_error;
         prev_error = error;
+        prev_prev_error = prev_error;
         return Kp * error + Ki * integral + Kd * derivative;
+    }
+
+    bool reached_SS() {
+        if (time_in_SS >= 20) {
+            time_in_SS = 0;
+            return true;
+        } else if (abs(prev_error - prev_prev_error) <= 10) { // 10 is the minimum tolerance 0.02 * max_error
+            time_in_SS++;
+        } else {
+            time_in_SS = 0;
+        }
+        return false;
     }
 
 private:
     float Kp, Ki, Kd;
-    float integral, prev_error;
+    float integral, prev_error, prev_prev_error;
+    int time_in_SS;
 };
 
 
@@ -61,11 +79,10 @@ public:
 
         // state variables
         is_occluded(false), object_detected(false),
-        light_angle(0), step_length(0), turn_angle(0),
-        left_encoder_count(0), right_encoder_count(0) {}
+        light_angle(0), step_length(0), turn_angle(0) {}
 
     void setup() {
-        Serial.begin(9600);
+        Serial.begin(115200);
         delay(1000);
 
         // Configure pins
@@ -73,6 +90,17 @@ public:
         for (int pin : IR_SENSOR_PINS) pinMode(pin, INPUT);                 // set IR sensors as input
         left_servo.attach(SERVO_PINS[0], minPulseWidth, maxPulseWidth);     // set up left servo
         right_servo.attach(SERVO_PINS[1], minPulseWidth, maxPulseWidth);    // set up right servo
+
+        // Initialize encoders with pull-up resistors
+        ESP32Encoder::useInternalWeakPullResistors = puType::up;
+        
+        // Attach encoders in full quadrature mode
+        left_encoder.attachFullQuad(LEFT_ENCODER_PINS[0], LEFT_ENCODER_PINS[1]);
+        right_encoder.attachFullQuad(RIGHT_ENCODER_PINS[0], RIGHT_ENCODER_PINS[1]);
+        
+        // Clear encoder counts
+        left_encoder.clearCount();
+        right_encoder.clearCount();
 
         // Inicializar la comunicación I2C con el display
         Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
@@ -85,6 +113,9 @@ public:
 
         // Borrar la pantalla
         display.clearDisplay();
+
+        // Initialize wifi
+        intentoconexion("poto", "12341243"); // nombre de red del robot, clave
     }
 
     void controlLoop() {
@@ -157,25 +188,28 @@ private:
     Servo left_servo, right_servo;
     PIDController move_pid_left, move_pid_right, turn_pid_left, turn_pid_right;
     Adafruit_SSD1306 display;
+    ESP32Encoder left_encoder, right_encoder;
 
     // state variables
     bool is_occluded, object_detected;                  // determined by light and IR sensors respectively
     int light_angle;                                    // determined by light sensors
     int step_length, turn_angle;                        // levy random algorithm
-    int left_encoder_count, right_encoder_count;        // encoder counts for the PID, reset in every state transition
 
-    // Pin configurations
+    // PIN CONFIGURATIONS
         // light sensors
-        static constexpr int NUM_LIGHT_SENSORS = 2;
-        const int LIGHT_SENSOR_PINS[NUM_LIGHT_SENSORS] = {13, 12};
-        const int SENSOR_ANGLES[NUM_LIGHT_SENSORS] = {90, -90};      // light sensor angles index in order
+        static constexpr int NUM_LIGHT_SENSORS = 6;
+        const int LIGHT_SENSOR_PINS[NUM_LIGHT_SENSORS] = {33, 32, 35, 34, 36, 39};
+        const int SENSOR_ANGLES[NUM_LIGHT_SENSORS] = {180, 0, 90, -90, 45, -45};      // light sensor angles index in order
         
         // IR sensors
-        static constexpr int NUM_IR_SENSORS = 4;
-        const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {32, 26, 25, 34};
-        const int left_push_sensor = 0, right_push_sensor = 1;              // pushing sensors index with respect to IR_SENSOR_PINS
+        static constexpr int NUM_IR_SENSORS = 5;
+        const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {14, 15, 5, 19, 23};
+    
         // servos
-        const int SERVO_PINS[2] = {14, 27};
+        const int SERVO_PINS[2] = {25, 18};
+        const int LEFT_ENCODER_PINS[2] = {16, 4};
+        const int RIGHT_ENCODER_PINS[2] = {12, 13};
+
 
     // LOGIC constants
     static constexpr int OCCLUDED_THRESHOLD = 900;
@@ -195,6 +229,10 @@ private:
     // Periodic sensing variables
     const int sensing_period_T = 500;
     unsigned long last_sensing_time = 0;
+
+    // WIFI SHIT
+    const char *serverUrl = "https://webesp32.onrender.com/data"; // URL de tu servidor
+    String robotId = "Robot 0";
 
     // Functions
     const char* getStateName() {
@@ -259,7 +297,10 @@ private:
     void transitionToState(State nextState) {
         current_state = nextState;          // state variable
 
-        left_encoder_count = 0, right_encoder_count = 0; // reset encoders between each state
+        // reset encoders between each state
+        left_encoder.clearCount();
+        right_encoder.clearCount();
+
         stop_servos();                                   // and stop the servos
 
         // print in terminal for debugging
@@ -326,25 +367,16 @@ private:
     }
 
     bool turnToAngle(int target_angle) {
-        if (abs(target_angle - left_encoder_count) > 0) { // REPLACE!!!! with function that uses pid method to verify %2 band for a set time
+        if (turn_pid_left.reached_SS() && turn_pid_right.reached_SS()) { // verify 2% band
             
             // We calculate the control value for the servos
-            int left_speed = turn_pid_left.compute(target_angle, left_encoder_count);
-            int right_speed = turn_pid_right.compute(target_angle, right_encoder_count);
+            int left_speed = turn_pid_left.compute(target_angle, left_encoder.getCount());
+            int right_speed = turn_pid_right.compute(target_angle, right_encoder.getCount());
 
             // We write the speed we want and cap the value at the allowed bands 0-180 maxCCW and maxCW
             // servos should move in the same direction to turn, hence both speeds add
             left_servo.write(constrain(stop_angle + left_speed, max_CCW, max_CW));
             right_servo.write(constrain(stop_angle + right_speed, max_CCW, max_CW));
-
-            // REPLACE!!!!  Simulating angular movement, use encoder
-            if (target_angle > 0) {
-                right_encoder_count++;
-                left_encoder_count++;
-            } else {
-                right_encoder_count--;
-                left_encoder_count--;
-            }
 
             return false; // we don't have 0 error so continue to turn
         } else {
@@ -353,11 +385,10 @@ private:
     }
 
     bool moveDistance(int target_distance) {
-        if (target_distance - left_encoder_count > 0) { // REPLACE!!!! use pid method to verify 2% band for x time
-
+        if (move_pid_left.reached_SS() && move_pid_right.reached_SS()) { // verify 2% band
             // We calculate the control value for the servos
-            int left_speed = move_pid_left.compute(target_distance, left_encoder_count);
-            int right_speed = move_pid_right.compute(target_distance, right_encoder_count);
+            int left_speed = move_pid_left.compute(target_distance, left_encoder.getCount());
+            int right_speed = move_pid_right.compute(target_distance, right_encoder.getCount());
 
             if (isObstacleDetected()) {  // always check for collision and stop if there is one coming
                 return true;
@@ -367,10 +398,6 @@ private:
             // servos need to move in opposing directions to move forward, hence one speed is + the other -
             left_servo.write(constrain(stop_angle + left_speed, max_CCW, max_CW));
             right_servo.write(constrain(stop_angle - right_speed, max_CCW, max_CW));
-
-            // REPLACE!!!! Simulating encoder feedback, use encoder
-            left_encoder_count++; 
-            right_encoder_count++;
 
             return false; // we don't have 0 error so continue to move
         } else {
@@ -389,8 +416,8 @@ private:
 
     void push() {
         // Read the two dedicated IR sensors (-10° and 10°)
-        bool left_sensor_active = (digitalRead(IR_SENSOR_PINS[left_push_sensor]) == LOW);  // Left-side IR
-        bool right_sensor_active = (digitalRead(IR_SENSOR_PINS[right_push_sensor]) == LOW); // Right-side IR
+        bool left_sensor_active = (digitalRead(IR_SENSOR_PINS[3]) == LOW);  // NW
+        bool right_sensor_active = (digitalRead(IR_SENSOR_PINS[4]) == LOW); // NE
 
         const int slow_down = 20;
         if (!left_sensor_active && right_sensor_active) {
@@ -427,4 +454,43 @@ private:
         return random(-180, 181); // random int between -180and180. Maybe add bias for a direction?
     }
 
+    void enviarMensajeALaWeb() {
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        HTTPClient http;
+
+        // Especifica la URL del servidor
+        http.begin(serverUrl);
+        http.addHeader("Content-Type", "application/json");
+
+        // Obtiene el estado como cadena
+        const char *stateString = getStateName();
+
+        // Construye el mensaje en formato JSON
+        String jsonMessage = "{\"idRobot\": \"" + robotId + "\", \"estadoRobot\": \"" + stateString + "\"}";
+
+        // Envía la solicitud POST
+        int httpResponseCode = http.POST(jsonMessage);
+
+        // Muestra la respuesta del servidor
+        if (httpResponseCode > 0)
+        {
+        String response = http.getString();
+        Serial.println("Respuesta del servidor: " + response);
+        }
+        else
+        {
+        Serial.println("Error en la solicitud: " + String(httpResponseCode));
+        }
+
+        // Finaliza la conexión HTTP
+        http.end();
+    }
+    else
+    {
+        Serial.println("WiFi desconectado");
+    }
+    }
+
 };
+
