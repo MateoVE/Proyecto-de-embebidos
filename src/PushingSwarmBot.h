@@ -10,11 +10,10 @@
 #include <Wifi.h>               // Wifi
 
 
-
 class PIDController {
 public:
     PIDController(float Kp, float Ki, float Kd) : Kp(Kp), Ki(Ki), Kd(Kd), 
-    integral(0), prev_error(0), prev_prev_error(0), time_in_SS(0) {}
+    integral(0), prev_error(100), prev_prev_error(0), time_in_SS(0) {}
 
     float compute(float target, float actual) {
         float error = target - actual;
@@ -22,10 +21,12 @@ public:
         float derivative = error - prev_error;
         prev_error = error;
         prev_prev_error = prev_error;
+        Serial.println("prev error: " + String(prev_error));
         return Kp * error + Ki * integral + Kd * derivative;
     }
 
     bool reached_SS() {
+        Serial.println(prev_error);
         if (time_in_SS >= 20) {
             time_in_SS = 0;
             return true;
@@ -66,10 +67,10 @@ public:
     PushingSwarmBot() : // initializer
         
         // pid servos
-        move_pid_left(1.0, 0.1, 0.05), 
-        move_pid_right(1.0, 0.1, 0.05), 
-        turn_pid_left(1.5, 0.1, 0.1), 
-        turn_pid_right(1.5, 0.1, 0.1), 
+        move_pid_left(1.0, 0, 0), 
+        move_pid_right(1.0, 0, 0), 
+        turn_pid_left(1.0, 0, 0), 
+        turn_pid_right(1.0, 0, 0), 
 
         // display
         display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1),
@@ -102,22 +103,50 @@ public:
         left_encoder.clearCount();
         right_encoder.clearCount();
 
-        // Inicializar la comunicación I2C con el display
+        // Connect I2C comms
         Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
-        // Inicializar la pantalla OLED
+        // Initialize OLED display
         if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-            Serial.println("Error al inicializar el display SSD1306");
-            while (true);
+            Serial.println("Failed to initialize OLED display");
+            while (true); // Halt on error
         }
 
-        // Borrar la pantalla
         display.clearDisplay();
+        display.display();
 
         // Initialize wifi
-        intentoconexion("poto", "12341243"); // nombre de red del robot, clave
+        //intentoconexion("poto", "12341243"); // nombre de red del robot, clave
     }
 
+    void controlLoop() {
+        periodicSensing();
+        
+        // Simple P control for following light
+        float p_gain = 0.1;  // Adjust this value to change turning sensitivity
+        
+        if (light_angle == 0) {
+            // Go straight until obstacle detected
+            if (!isObstacleDetected()) {
+                left_servo.write(max_CW);
+                right_servo.write(max_CCW);
+            } else {
+                stop_servos();
+            }
+        } else if (is_occluded) {
+            stop_servos();
+        } else {
+            // Turn using proportional control
+            int turn_speed = p_gain * light_angle;
+            
+            // Apply turning speeds to servos
+            left_servo.write(constrain(stop_angle - turn_speed, max_CCW, max_CW));
+            right_servo.write(constrain(stop_angle - turn_speed, max_CCW, max_CW));
+        } 
+
+
+    }
+/*
     void controlLoop() {
         periodicSensing(); // Perform background sensing
         // we check for the direction of light so we always know where it is and if we went inside a shadow
@@ -180,6 +209,44 @@ public:
         }
     }
 
+*/
+
+     void test_turn(int angle) {
+        left_encoder.clearCount();
+        right_encoder.clearCount();
+
+        left_servo.write(constrain(stop_angle - 45, max_CCW, max_CW));
+        right_servo.write(constrain(stop_angle - 45, max_CCW, max_CW));
+
+        delay(250); // ms por grado
+        stop_servos(); 
+
+        Serial.println("turning");
+        Serial.println(left_encoder.getCount());
+        Serial.println(right_encoder.getCount());
+
+        delay(1000);
+
+    }
+
+    void test_move(int distance) {
+        left_encoder.clearCount();
+        right_encoder.clearCount();
+
+        left_servo.write(constrain(stop_angle + 90, max_CCW, max_CW));
+        right_servo.write(constrain(stop_angle - 90, max_CCW, max_CW));
+
+        delay(400); // 10cm en 250ms
+        stop_servos(); 
+
+        Serial.println("moving");
+        Serial.println(left_encoder.getCount());
+        Serial.println(right_encoder.getCount());
+
+        delay(1000);
+
+
+    }
 
 private:
     // Objects
@@ -199,40 +266,38 @@ private:
         // light sensors
         static constexpr int NUM_LIGHT_SENSORS = 6;
         const int LIGHT_SENSOR_PINS[NUM_LIGHT_SENSORS] = {33, 32, 35, 34, 36, 39};
-        const int SENSOR_ANGLES[NUM_LIGHT_SENSORS] = {180, 0, 90, -90, 45, -45};      // light sensor angles index in order
-        
+        const int SENSOR_ANGLES[NUM_LIGHT_SENSORS] = {-90, 180, 45, 90, -45, 0};      // light sensor angles index in order
         // IR sensors
         static constexpr int NUM_IR_SENSORS = 5;
-        const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {14, 15, 5, 19, 23};
+        const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {14, 15, 23, 5, 19};
     
         // servos
-        const int SERVO_PINS[2] = {25, 18};
+        const int SERVO_PINS[2] = {27, 18};
         const int LEFT_ENCODER_PINS[2] = {16, 4};
         const int RIGHT_ENCODER_PINS[2] = {12, 13};
 
-
     // LOGIC constants
-    static constexpr int OCCLUDED_THRESHOLD = 900;
+    static constexpr int OCCLUDED_THRESHOLD = 300;
     static constexpr int MAX_STEPS_TO_FIND_OBJECT = 50;
 
     // Servo parameters
-    const int minPulseWidth = 500, maxPulseWidth = 2400;
+    static constexpr int minPulseWidth = 500, maxPulseWidth = 2500;
     static constexpr int stop_angle = 90;
     static constexpr int max_CW = 180, max_CCW = 0;
 
     // Display parameters
-    const int SCREEN_WIDTH = 128;
-    const int SCREEN_HEIGHT = 64;
-    const int I2C_SDA_PIN = 21;
-    const int I2C_SCL_PIN = 22;
+    static constexpr int SCREEN_WIDTH = 128;
+    static constexpr int SCREEN_HEIGHT = 64;
+    static constexpr int I2C_SDA_PIN = 21;
+    static constexpr int I2C_SCL_PIN = 22;
 
     // Periodic sensing variables
     const int sensing_period_T = 500;
     unsigned long last_sensing_time = 0;
 
     // WIFI SHIT
-    const char *serverUrl = "https://webesp32.onrender.com/data"; // URL de tu servidor
-    String robotId = "Robot 0";
+    //const char *serverUrl = "https://webesp32.onrender.com/data"; // URL de tu servidor
+    //String robotId = "Robot 0";
 
     // Functions
     const char* getStateName() {
@@ -292,6 +357,8 @@ private:
         // Show on display
         displayMessage(getModeName(), getStateName());
 
+        // Show on wifi
+        //MsgOverWifi();
     }
 
     void transitionToState(State nextState) {
@@ -315,8 +382,8 @@ private:
         current_mode = next_mode;       // state variable
 
         // Print in terminal for debugging
-        Serial.print("Transitioning to MODE: ");
-        Serial.println(getModeName());
+        Serial.println("Transitioning to MODE: ");
+        Serial.print(getModeName());
 
         // Always transition to the first state of the corresponding mode
         switch (next_mode) {
@@ -367,10 +434,12 @@ private:
     }
 
     bool turnToAngle(int target_angle) {
-        if (turn_pid_left.reached_SS() && turn_pid_right.reached_SS()) { // verify 2% band
+        bool both_in_steady_state = turn_pid_left.reached_SS() || turn_pid_right.reached_SS();
+        if (!both_in_steady_state) { // verify 2% band
+            Serial.println("turn?");
             
             // We calculate the control value for the servos
-            int left_speed = turn_pid_left.compute(target_angle, left_encoder.getCount());
+            int left_speed = turn_pid_left.compute(target_angle, right_encoder.getCount());
             int right_speed = turn_pid_right.compute(target_angle, right_encoder.getCount());
 
             // We write the speed we want and cap the value at the allowed bands 0-180 maxCCW and maxCW
@@ -380,14 +449,16 @@ private:
 
             return false; // we don't have 0 error so continue to turn
         } else {
+            Serial.print("reached band");
             return true; // value reached 2% band so we reached our goal
         }
     }
 
     bool moveDistance(int target_distance) {
-        if (move_pid_left.reached_SS() && move_pid_right.reached_SS()) { // verify 2% band
+        bool both_in_steady_state = move_pid_left.reached_SS() || move_pid_right.reached_SS();
+        if (!both_in_steady_state) { // verify 2% band
             // We calculate the control value for the servos
-            int left_speed = move_pid_left.compute(target_distance, left_encoder.getCount());
+            int left_speed = move_pid_left.compute(target_distance, right_encoder.getCount());
             int right_speed = move_pid_right.compute(target_distance, right_encoder.getCount());
 
             if (isObstacleDetected()) {  // always check for collision and stop if there is one coming
@@ -409,15 +480,18 @@ private:
     
     bool isObstacleDetected() {
         for (int pin : IR_SENSOR_PINS) {                // going through every pin in the list IR_SENSOR_PINS
-            if (digitalRead(pin) == LOW) return true;   // as long as one detects an object, return true
+            if (digitalRead(pin) == LOW) {
+                Serial.println("Obstacle");
+                return true;   // as long as one detects an object, return true
+            }
         }
         return false;                                   // if no sensors see anything, return false
     }
 
     void push() {
         // Read the two dedicated IR sensors (-10° and 10°)
-        bool left_sensor_active = (digitalRead(IR_SENSOR_PINS[3]) == LOW);  // NW
-        bool right_sensor_active = (digitalRead(IR_SENSOR_PINS[4]) == LOW); // NE
+        bool left_sensor_active = (digitalRead(IR_SENSOR_PINS[1]) == LOW);  // NW
+        bool right_sensor_active = (digitalRead(IR_SENSOR_PINS[3]) == LOW); // NE
 
         const int slow_down = 20;
         if (!left_sensor_active && right_sensor_active) {
@@ -440,21 +514,29 @@ private:
     }
 
     void planPath() {
+        Serial.println("Dist Steps: ");
         step_length = levyStep();    // random step
+        Serial.print(step_length);
+
+        Serial.println("Angle steps: ");
         turn_angle = levyAngle();    // random angle
+        Serial.print(turn_angle);
     }
 
     int levyStep() {
         float u = random(1, 1000) / 1000.0;
         // step = alpha * pow(u, -1.0 / mu);
-        return static_cast<int>(6.0 * pow(u, -1.0 / 1.5));
+        return static_cast<int>(100 * pow(u, -1.0 / 1.5));
     }
 
     int levyAngle() {
-        return random(-180, 181); // random int between -180and180. Maybe add bias for a direction?
+        int ang = random(-180, 181);
+        return ang*20; // random int between -180and180. Maybe add bias for a direction?
+        
     }
 
-    void enviarMensajeALaWeb() {
+/*
+    void MsgOverWifi() {
     if (WiFi.status() == WL_CONNECTED)
     {
         HTTPClient http;
@@ -491,6 +573,6 @@ private:
         Serial.println("WiFi desconectado");
     }
     }
-
+*/
 };
 

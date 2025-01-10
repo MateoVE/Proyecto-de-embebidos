@@ -52,7 +52,7 @@ public:
         display.display();
 
         // Initialize wifi
-        intentoconexion("poto", "12341243");
+        // intentoconexion("poto", "12341243");
     }
 
     void testOled() {
@@ -61,6 +61,10 @@ public:
         display.setTextSize(1);
         display.setTextColor(SSD1306_WHITE);
         display.println("Hello World");
+        display.printf("%lld,%lld\n", 
+            left_encoder.getCount(),
+            right_encoder.getCount()
+        );
         display.display();
     }
 
@@ -68,7 +72,8 @@ public:
     void testLight() {
         Serial.println("Light Sensor Readings:");
         for (int i = 0; i < NUM_LIGHT_SENSORS; ++i) {
-            Serial.printf("Sensor %d: %d\n", i, analogRead(LIGHT_SENSOR_PINS[i]));
+            //Serial.printf("Sensor %d: %d\n", i, analogRead(LIGHT_SENSOR_PINS[i])>2000);
+            Serial.printf("Angle %d: %d\n", SENSOR_ANGLES[i], analogRead(LIGHT_SENSOR_PINS[i]));
         }
     }
 
@@ -80,11 +85,27 @@ public:
     }
 
     void testServos(){
+
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.setTextSize(2);
+        display.setTextColor(SSD1306_WHITE);
+        display.println("ON");
+        display.display();
+
         left_servo.write(180);
         right_servo.write(180);
     }
 
     void stopServos(){
+
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.setTextSize(2);
+        display.setTextColor(SSD1306_WHITE);
+        display.println("OFF");
+        display.display();
+
         left_servo.write(90);
         right_servo.write(90);
     }
@@ -114,7 +135,7 @@ public:
         http.addHeader("Content-Type", "application/json");
 
         // Obtiene el estado como cadena
-        const char *stateString = "Pipi";
+        const char *stateString = "test2";
         String robotId = "Poto";
 
         // Construye el mensaje en formato JSON
@@ -149,13 +170,17 @@ private:
     ESP32Encoder left_encoder, right_encoder;
 
     // Pin configurations
-    static constexpr int NUM_LIGHT_SENSORS = 8;
+    static constexpr int NUM_LIGHT_SENSORS = 6;
     const int LIGHT_SENSOR_PINS[NUM_LIGHT_SENSORS] = {33, 32, 35, 34, 36, 39};
     static constexpr int NUM_IR_SENSORS = 5;
-    const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {14, 15, 5, 19, 23};
-    const int SERVO_PINS[2] = {25, 18};
-    const int LEFT_ENCODER_PINS[2] = {16, 4};
-    const int RIGHT_ENCODER_PINS[2] = {12, 13};
+    const int IR_SENSOR_PINS[NUM_IR_SENSORS] = {14, 15, 23, 5, 19};
+    const int SERVO_PINS[2] = {27, 18};
+    const int LEFT_ENCODER_PINS[2] = {16, 4};   // A, B
+    const int RIGHT_ENCODER_PINS[2] = {12, 13}; // A, B
+
+
+    const int SENSOR_ANGLES[NUM_LIGHT_SENSORS] = {-90, 180, 45, 90, -45, 0};      // light sensor angles index in order
+
 
     // Hardware parameters
     static constexpr int minPulseWidth = 500;
